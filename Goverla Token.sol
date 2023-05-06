@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Snapshot.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+
+contract GoverlaToken is ERC20, ERC20Snapshot, Ownable, Pausable {
+    using SafeMath for uint256;
+
+    address public treasuryWallet = 0x14400987d7a7Bd01D8EDf01249Db7b3c4B60b9C2;
+    uint256 public constant TREASURY_FEE = 2;
+
+    event Lock(address indexed _address, uint256 _amount, uint256 _releaseTime);
+
+    struct LockInfo {
+        uint256 amount;
+        uint256 releaseTime;
+    }
+
+    mapping(address => LockInfo) public lockedTokens;
+
+    constructor() ERC20("Goverla Token", "GT") {
+        _mint(treasuryWallet, 1000000 * 10**decimals());
+    }
+
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal override(ERC20, ERC20Snapshot) {
+        super._beforeTokenTransfer(from, to, amount);
+
+        if (lockedTokens[from].amount > 0 && block.timestamp >= lockedTokens[from].releaseTime) {
+            lockedTokens[from].amount = 0;
+            lockedTokens[from].releaseTime = 0;
+        }
+    }
+
+   function _transfer(address sender, address recipient, uint256 amount) internal override whenNotPaused {
+     uint256 fee = amount.mul(TREASURY_FEE).div(100);
+     uint256 amountToTransfer = amount.sub(fee);
+
+     require(amountToTransfer <= balanceOf(sender).sub(lockedTokens[sender].amount), "Transfer amount exceeds unlocked balance");
+
+     // Стабілізаційна подушка
+
+     uint256 priceChangePercent = get24hPriceChangePercent();
+     if (priceChangePercent > 20) {
+        uint256 stabilizationFee = amount.mul(30).div(100);
+        amountToTransfer = amountToTransfer.sub(stabilizationFee);
+        _burn(sender, stabilizationFee);
+     } else if (int256(priceChangePercent) < -20) {
+        uint256 stabilizationReward = amount.mul(30).div(100);
+        amountToTransfer = amountToTransfer.add(stabilizationReward);
+        _mint(sender, stabilizationReward);
+     }
+
+        // Переказ токенів
+
+        super._transfer(sender, treasuryWallet, fee);
+        super._transfer(sender, recipient, amountToTransfer);
+     }
+
+    function burn(uint256 amount) public {
+        _burn(_msgSender(), amount);
+     }
+
+    function lockTokens(address _address, uint256 _amount, uint256 _releaseTime) public onlyOwner {
+        require(_address != address(0), "Invalid address");
+        require(_amount > 0, "Amount must be greater than 0");
+        require(_releaseTime > block.timestamp, "Release time must be in the future");
+
+        lockedTokens[_address].amount = lockedTokens[_address].amount.add(_amount);
+        lockedTokens[_address].releaseTime = _releaseTime;
+
+        emit Lock(_address, _amount, _releaseTime);
+    }
+
+    function snapshot() public onlyOwner {
+     _snapshot();
+     }
+
+    function pause() public onlyOwner {
+     _pause();
+     }
+
+    function unpause() public onlyOwner {
+     _unpause();
+     }
+
+    // Додаткові методи для стабілізаційної подушки
+
+    function get24hPriceChangePercent() public view returns (uint256) {
+     // Повертаємо відсоток зміни ціни токену за останні 24 години
+     // Це можна зробити, наприклад, за допомогою Chainlink Price Feeds
+     // Поки що реалізуємо тимчасовий механізм, який генерує випадкові значення
+
+     uint256 random = uint256(keccak256(abi.encodePacked(block.timestamp))) % 101;
+     if (random < 50) {
+        return 0 - random;
+     } else {
+        return random;
+     }
+  }
+}
